@@ -8,11 +8,17 @@ this dict, never a change to deduct() itself or its callers.
 """
 
 import math
+from datetime import datetime, timezone
 from decimal import Decimal
 from typing import Callable, Dict, Optional
 
-from app.database.accessor.breeze_buddy.wallets import apply_deduction, get_wallet
-from app.schemas.breeze_buddy.wallets import WalletTransactionResponse
+from app.database.accessor.breeze_buddy.wallets import (
+    DeductionPlan,
+    apply_deduction,
+    get_wallet,
+)
+from app.schemas.breeze_buddy.wallets import WalletResponse, WalletTransactionResponse
+from app.services.breeze_buddy.wallet import plan
 from app.services.breeze_buddy.wallet.exceptions import (
     UnknownEventTypeError,
     WalletNotFoundError,
@@ -54,10 +60,12 @@ async def has_sufficient_credits(
     floor: int = 0,
     **event_kwargs: object,
 ) -> bool:
-    """Cheap, unlocked read-only check: does this merchant currently have a
-    positive balance? With ``event_type``, whether the balance covers that
-    event's price and still leaves ``floor`` credits; ``event_kwargs`` are
-    passed to the rule exactly as deduct() passes them.
+    """Cheap, unlocked read-only check: does this merchant currently have
+    credits -- the month's plan credits left plus the prepaid balance? With
+    ``event_type``, whether they cover that event's price and still leave
+    ``floor`` credits; ``event_kwargs`` are passed to the rule exactly as
+    deduct() passes them. A plan trial allows and FROZEN blocks, whatever
+    the credits (services.breeze_buddy.wallet.plan).
 
     Deliberately does NOT take the wallet row lock -- this is a pre-flight
     gate, not the source of truth. The actual deduction (deduct(), below)
@@ -73,12 +81,18 @@ async def has_sufficient_credits(
     wallet = await get_wallet(merchant_id)
     if wallet is None:
         raise WalletNotFoundError(merchant_id)
-    if event_type is None:
-        return wallet.balance_credits > 0
-    rule = BILLING_RULES.get(event_type)
+    rule = None
+    if event_type is not None:
+        rule = BILLING_RULES.get(event_type)
+        if rule is None:
+            raise UnknownEventTypeError(event_type)
+    gate = plan.plan_gate(wallet)
+    if gate is not None:
+        return gate
+    credits = plan.available(wallet, plan.current_period())
     if rule is None:
-        raise UnknownEventTypeError(event_type)
-    return wallet.balance_credits >= rule(**event_kwargs) + floor
+        return credits > 0
+    return credits >= rule(**event_kwargs) + floor
 
 
 async def deduct(
@@ -96,6 +110,11 @@ async def deduct(
     for free (same mechanism that protects recharges against webhook
     retries).
 
+    The charge takes the month's plan credits first, then the prepaid
+    balance, decided on the locked wallet; a plan trial makes it free
+    (services.breeze_buddy.wallet.plan). The ledger row records the
+    balance move.
+
     Raises:
         UnknownEventTypeError: if event_type has no BILLING_RULES entry.
         ValueError: if no wallet exists for merchant_id, if the rule rejects
@@ -109,13 +128,25 @@ async def deduct(
     if rule is None:
         raise UnknownEventTypeError(event_type)
 
-    credits = rule(**event_kwargs)
+    cost = rule(**event_kwargs)
+    now = datetime.now(timezone.utc)
+    period = plan.current_period(now)
+
+    def decide(wallet: WalletResponse) -> DeductionPlan:
+        charge = plan.split_charge(wallet, cost, period, now)
+        if wallet.subscription_status == plan.NO_PLAN:
+            return DeductionPlan(balance_delta=-charge.from_balance)
+        return DeductionPlan(
+            balance_delta=-charge.from_balance,
+            plan_used_credits=plan.used_this_month(wallet, period) + charge.from_plan,
+            last_reset_date=period,
+        )
 
     return await apply_deduction(
         merchant_id=merchant_id,
-        credits_delta=-credits,
         gateway=event_type,
         gateway_ref_id=ref_id,
+        decide=decide,
     )
 
 
