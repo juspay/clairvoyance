@@ -23,17 +23,20 @@ copy on, check objects land, park on, restart Postgres, both off, replay.
 
 Only ``parked/`` is replayed: ``copied/`` requests also went to Postgres.
 Each object holds ``path`` and ``body`` (the replay POSTs body to path),
-``auth`` (the header the caller sent, name and value), ``merchant_id``,
-``key``, ``received_at`` and ``receipt`` (what the door answered). A parked
+``auth`` (the header the caller sent: its name and its value, encrypted),
+``merchant_id``, ``key``, ``received_at`` and ``receipt`` (what the door
+answered). A parked
 request meets the door's auth and validation for the first time at replay,
 so one that was never allowed, or never valid, is refused there and never
 reaches Postgres. Events dedupe on (merchant_id, source, external_id);
 leads do not, so a lead replay looks each request_id up first.
 
-``auth`` is a live credential: anyone who can READ the bucket can act as
-the callers in it. The app's service account only creates objects, reads
-are for the replay operators, the lifecycle is short, and the value is
-never logged.
+``auth`` is a live credential, so its value is stored encrypted
+(``sealed_auth``: AES-256-GCM under CREDENTIAL_ENCRYPTION_KEY, the key the
+credentials table uses). Reading the bucket is not enough to act as the
+callers in it; the replay decrypts on a pod that holds the key. A request
+whose credential cannot be encrypted is not archived. The value is never
+logged.
 
 Fail-safe throughout: an unreadable flag means off, and any archive failure
 means the request runs exactly as today.
@@ -54,6 +57,7 @@ from starlette.types import ASGIApp, Message, Receive, Scope, Send
 from app.core.config import dynamic as dyn_cfg
 from app.core.config.static import INGEST_ARCHIVE_GCS_BUCKET
 from app.core.logger import logger
+from app.services.encryption import encrypt_value
 from app.services.gcp.storage.client import get_gcs_bucket
 
 LOG_COMPONENT = "ingest.archive"
@@ -186,6 +190,27 @@ def presented_auth(headers: Mapping[str, str]) -> Optional[Dict[str, str]]:
     if auth:
         return {"header": "authorization", "value": auth}
     return None
+
+
+def sealed_auth(headers: Mapping[str, str]) -> Optional[Dict[str, str]]:
+    """``presented_auth`` as it is stored: the header's name, and its value
+    encrypted, as ``{"header": ..., "encrypted_value": ...}``. The replay
+    decrypts it (``app.services.encryption.decrypt_value``) and sends the
+    header as the caller did.
+
+    Raises when the value cannot be encrypted (CREDENTIAL_ENCRYPTION_KEY
+    unset or invalid): a token is never written in the clear, so the request
+    is not archived and runs as today."""
+    auth = presented_auth(headers)
+    if auth is None:
+        return None
+    encrypted = encrypt_value(auth["value"])
+    if encrypted is None:
+        raise RuntimeError(
+            "the caller's credential cannot be encrypted "
+            "(CREDENTIAL_ENCRYPTION_KEY unset or invalid)"
+        )
+    return {"header": auth["header"], "encrypted_value": encrypted}
 
 
 def object_name(mode: str, door: str, received_at: datetime) -> str:
@@ -386,8 +411,8 @@ class IngestArchiveMiddleware:
                 k.decode("latin-1").lower(): v.decode("latin-1")
                 for k, v in scope.get("headers", [])
             }
-            auth = presented_auth(headers)
             try:
+                auth = sealed_auth(headers)
                 if mode == PARK:
                     response = await _park(door, path, raw, auth)
                     if response is not None:

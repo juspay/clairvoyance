@@ -98,6 +98,9 @@ async def check_rate_limit(
     if limit <= 0:
         # A non-positive limit means "disabled" — pass through without
         # touching Redis at all so callers can flip a feature off cheaply.
+        # This is an ops switch (env / dynamic config). A limit that a merchant
+        # or an API caller can set must be validated >= 1 before it gets here,
+        # or setting 0 removes the limit: the widget_config schema does that.
         return RateLimitDecision(
             allowed=True, count=0, limit=limit, retry_after_seconds=0
         )

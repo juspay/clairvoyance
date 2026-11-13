@@ -14,9 +14,14 @@ def calculate_hmac_sha256(value: str, sign_key: str) -> str:
 
     Returns:
         Base64-encoded HMAC-SHA256 signature
+
+    Raises:
+        ValueError: ``sign_key`` is empty. There is no signature without a
+        key, and returning "" let a caller send or compare an unsigned
+        message as if it were signed.
     """
     if not sign_key:
-        return ""
+        raise ValueError("calculate_hmac_sha256 needs a non-empty sign_key")
 
     # Generate HMAC-SHA256 signature
     signature = hmac.new(

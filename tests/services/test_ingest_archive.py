@@ -15,6 +15,7 @@ it.
 from __future__ import annotations
 
 import asyncio
+import base64
 import json
 import threading
 import time
@@ -28,6 +29,7 @@ from starlette.requests import Request as StarletteRequest
 
 import app.api.routers.breeze_buddy.leads as leads_door
 import app.crm.record.api as record_api
+import app.services.encryption as encryption
 import app.services.ingest_archive as archive
 from app.ai.voice.agents.breeze_buddy.types.models import PushLeadRequest
 from app.api.security.breeze_buddy.rbac_token import get_current_user_with_rbac
@@ -55,6 +57,25 @@ LEAD_BODY: Dict[str, Any] = {
 }
 S2S = {"x-s2s-token": "tok-merchant-A"}
 BEARER = {"authorization": "Bearer jwt-relay"}
+
+
+@pytest.fixture(autouse=True)
+def encryption_key(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The archive stores no credential it cannot encrypt, so every test
+    runs with a key, as a deployment does."""
+    monkeypatch.setattr(
+        encryption,
+        "CREDENTIAL_ENCRYPTION_KEY",
+        base64.urlsafe_b64encode(b"k" * 32).decode(),
+    )
+
+
+def _opened(auth: Dict[str, str]) -> Dict[str, str]:
+    """A stored ``auth`` as the replay reads it: decrypted."""
+    assert set(auth) == {"header", "encrypted_value"}
+    value = encryption.decrypt_value(auth["encrypted_value"])
+    assert value is not None
+    return {"header": auth["header"], "value": value}
 
 
 # --- doubles --------------------------------------------------------------------
@@ -243,8 +264,9 @@ def test_stored_header_authenticates_as_the_same_token(
             }
         )
 
-    stored = archive.presented_auth(headers)
-    replayed = {stored["header"]: stored["value"]} if stored else {}
+    stored = archive.sealed_auth(headers)
+    opened = _opened(stored) if stored else None
+    replayed = {opened["header"]: opened["value"]} if opened else {}
     assert _extract_token(request(replayed)) == _extract_token(request(headers))
 
 
@@ -308,13 +330,13 @@ def test_copy_mode_copies_and_runs_as_today(monkeypatch: pytest.MonkeyPatch) -> 
     assert all(name.startswith("copied/") for name, _ in bucket.written)
     objects = {name.split("/")[1]: record for name, record in bucket.objects()}
     assert objects["ingest-events"]["mode"] == "copy"
-    assert objects["ingest-events"]["auth"] == {
+    assert _opened(objects["ingest-events"]["auth"]) == {
         "header": "x-s2s-token",
         "value": "tok-merchant-A",
     }
     assert objects["ingest-events"]["key"] == "orders/create:123"
     assert objects["ingest-events"]["body"] == EVENT_BODY
-    assert objects["buddy-leads"]["auth"] == {
+    assert _opened(objects["buddy-leads"]["auth"]) == {
         "header": "authorization",
         "value": "Bearer jwt-relay",
     }
@@ -353,7 +375,10 @@ def test_park_mode_event_skips_auth_and_postgres(
     assert name.startswith("parked/ingest-events/")
     assert record["mode"] == "park"
     assert record["path"] == EVENTS
-    assert record["auth"] == {"header": "x-s2s-token", "value": "tok-merchant-A"}
+    assert _opened(record["auth"]) == {
+        "header": "x-s2s-token",
+        "value": "tok-merchant-A",
+    }
     assert record["merchant_id"] == "m1"
     assert record["key"] == "orders/create:123"
     assert record["receipt"] == response.json()
@@ -384,7 +409,10 @@ def test_park_mode_lead_skips_auth_and_postgres(
     [(name, record)] = bucket.objects()
     assert name.startswith("parked/buddy-leads/")
     assert record["path"] == LEADS
-    assert record["auth"] == {"header": "authorization", "value": "Bearer jwt-relay"}
+    assert _opened(record["auth"]) == {
+        "header": "authorization",
+        "value": "Bearer jwt-relay",
+    }
     assert record["body"] == LEAD_BODY  # exactly what the caller sent
     assert record["key"] == "order-1"
     assert record["receipt"]["lead_call_tracker_id"] == answer["lead_call_tracker_id"]
@@ -572,6 +600,47 @@ def test_unset_bucket_env_writes_nothing(monkeypatch: pytest.MonkeyPatch) -> Non
     monkeypatch.setattr(archive, "_bucket_resolved", False)
     monkeypatch.setattr(archive, "_bucket", None)
     assert archive._upload("x.json", "{}") is False
+
+
+@pytest.mark.parametrize("flags", [{"archive_on": True}, {"db_off": True}])
+def test_the_credential_is_never_stored_in_the_clear(
+    monkeypatch: pytest.MonkeyPatch, flags: Dict[str, bool]
+) -> None:
+    # The object sits in a bucket: whoever can read it must not be able to
+    # act as the caller. Only the header's name is readable.
+    _flags(monkeypatch, **flags)
+    bucket = _bucket(monkeypatch, _Bucket())
+    app, _ = _app(monkeypatch)
+
+    with TestClient(app) as client:
+        client.post(EVENTS, json=EVENT_BODY, headers=S2S)
+        client.post(LEADS, json=LEAD_BODY, headers=BEARER)
+        _settle(bucket, 2)
+
+    assert len(bucket.written) == 2
+    for _, data in bucket.written:
+        assert "tok-merchant-A" not in data and "jwt-relay" not in data
+
+
+@pytest.mark.parametrize("key", ["", "not-a-32-byte-key"])
+def test_a_credential_that_cannot_be_encrypted_is_not_archived(
+    monkeypatch: pytest.MonkeyPatch, key: str
+) -> None:
+    # No key, or a bad one: nothing is written, in the clear or otherwise,
+    # and the request runs as today (auth and Postgres).
+    monkeypatch.setattr(encryption, "CREDENTIAL_ENCRYPTION_KEY", key)
+    _flags(monkeypatch, db_off=True)
+    bucket = _bucket(monkeypatch, _Bucket())
+    app, calls = _app(monkeypatch)
+
+    with TestClient(app) as client:
+        events = client.post(EVENTS, json=EVENT_BODY, headers=S2S)
+        leads = client.post(LEADS, json=LEAD_BODY, headers=BEARER)
+
+    assert bucket.written == []
+    assert events.json()["id"] == "11111111-2222-3333-4444-555555555555"
+    assert leads.json()["lead_call_tracker_id"] == "lead-from-postgres"
+    assert calls.auth == ["m1", "rbac"]
 
 
 def test_the_credential_is_never_logged(monkeypatch: pytest.MonkeyPatch) -> None:

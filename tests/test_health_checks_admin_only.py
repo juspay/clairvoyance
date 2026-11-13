@@ -87,16 +87,24 @@ def test_basic_health_stays_public():
     assert response.json() == {"status": "healthy"}
 
 
-def test_database_check_hides_error_text(monkeypatch):
+def test_database_check_says_only_that_it_is_unhealthy(monkeypatch):
+    # Public route: no error text and no error type. The type tells an
+    # anonymous caller what is failing; it goes to the logs.
     connection = MagicMock()
     connection.__aenter__.side_effect = RuntimeError(SECRET_TEXT)
     monkeypatch.setattr(systems, "db_connection", MagicMock(return_value=connection))
+    log = MagicMock()
+    monkeypatch.setattr(systems, "logger", log)
 
     response = _client().get("/health/database")
 
     assert response.status_code == 400
-    assert SECRET_TEXT not in response.text
-    assert response.json()["error_type"] == "RuntimeError"
+    assert response.json() == {
+        "status": "unhealthy",
+        "database": "disconnected",
+        "message": "Database connection failed",
+    }
+    assert "RuntimeError" in log.error.call_args.args[0]
 
 
 def test_redis_check_hides_error_text(monkeypatch):

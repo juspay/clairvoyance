@@ -40,6 +40,7 @@ from app.core.logger.context import set_log_context
 from app.core.security.authorization import require_admin
 from app.database.accessor.breeze_buddy.merchants import (
     check_merchant_identifier_exists,
+    get_merchant_by_merchant_identifier,
     get_merchant_s2s_token,
 )
 from app.schemas import UserInfo
@@ -53,14 +54,41 @@ async def crm_admin_user(
     return current_user
 
 
-def assert_merchant_access(
+async def _scope_covers_merchant(caller: UserInfo, merchant_id: str) -> bool:
+    """Is this merchant inside a non-admin caller's scope? The lead door's
+    rule (leads/rbac.py), both lists read:
+
+    - the merchant is named in ``merchant_ids``; or
+    - ``merchant_ids`` holds ``"*"``, which means "every merchant of my
+      resellers": the merchant's reseller must be in ``reseller_ids``, or
+      that list holds ``"*"`` too.
+
+    A ``"*"`` in ``reseller_ids`` alone covers no merchant the token does
+    not name. Fail closed: an unknown merchant, or one with no reseller, is
+    NO, and a failed lookup raises.
+    """
+    if merchant_id in caller.merchant_ids:
+        return True
+    if "*" not in caller.merchant_ids:
+        return False
+    if "*" in caller.reseller_ids:
+        return True
+    merchant = await get_merchant_by_merchant_identifier(merchant_id)
+    return (
+        merchant is not None
+        and merchant.reseller_id is not None
+        and merchant.reseller_id in caller.reseller_ids
+    )
+
+
+async def assert_merchant_access(
     current_user: UserInfo, merchant_id: str, operation: str
 ) -> None:
     """The tenancy check, in one place, for merchant-facing CRM routes.
 
     Fail closed: a caller who does not hold this merchant_id gets 403 before
-    anything reads or writes. Admins pass, and "*" is the full-access
-    wildcard the RBAC tokens already use.
+    anything reads or writes. Admins pass; "*" on merchants passes only for
+    the token's resellers' merchants (``_scope_covers_merchant``).
 
     merchant_id is taken from the REQUEST (body for a POST, query for a GET),
     never derived from the token: a caller may hold several merchant_ids, so
@@ -78,10 +106,7 @@ def assert_merchant_access(
     """
     if current_user.role == "admin":
         return
-    if (
-        merchant_id not in current_user.merchant_ids
-        and "*" not in current_user.merchant_ids
-    ):
+    if not await _scope_covers_merchant(current_user, merchant_id):
         # merchant_id arrives in the request body and username off a token,
         # so neither belongs inside the message: a newline in either forges a
         # log line, and a log a reader cannot trust is worse than no log.
@@ -140,7 +165,7 @@ def merchant_scope(operation: str, component: str) -> Callable[..., Awaitable[st
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="merchant_id is required",
             )
-        assert_merchant_access(current_user, merchant_id, operation)
+        await assert_merchant_access(current_user, merchant_id, operation)
         set_log_context(component=component, merchant_id=merchant_id)
         return merchant_id
 
@@ -219,9 +244,9 @@ async def verify_s2s_caller(merchant_id: str, request: Request) -> str:
        relay. Nautilus already holds one for the lead door
        (``CLAIRVOYANCE_JWT_TOKEN``) and pushes Shopify facts with that
        same credential, so the ingest door needs no new secret minted per
-       shop. Scope is read exactly as the lead door reads it
-       (``leads/rbac.py``): ``"*"`` on merchants or resellers, or the
-       merchant named outright.
+       shop. A ``"*"`` (or the admin role) says which KIND of caller this
+       is; whether this merchant is in its scope is read from both lists
+       (``_scope_covers_merchant``), as the lead door reads them.
     2. **Per-merchant token** — the merchant has ``merchants.s2s_token``
        provisioned (the WooCommerce plugin shape). Defers unchanged to
        ``verify_s2s_merchant``: constant-time compare against the stored
@@ -263,11 +288,8 @@ async def verify_s2s_caller(merchant_id: str, request: Request) -> str:
     # A wildcard scope can only belong to a relay/admin credential, never
     # to a per-merchant token — so there is no stored row it could have
     # been revoked against, and no reason to pay for the lookup.
-    if (
-        caller.role == "admin"
-        or "*" in caller.merchant_ids
-        or "*" in caller.reseller_ids
-    ):
+    is_admin = caller.role == "admin"
+    if is_admin or "*" in caller.merchant_ids or "*" in caller.reseller_ids:
         # Scope says "any merchant" — it does not say this one is real. On the
         # narrow path the stored-token compare proves existence for free; here
         # nothing does, so the envelope's merchant_id would be taken on the
@@ -279,6 +301,16 @@ async def verify_s2s_caller(merchant_id: str, request: Request) -> str:
         # non-enumerable the same way.
         if not await check_merchant_identifier_exists(merchant_id):
             _log_refusal(merchant_id, "unknown_merchant")
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Integration not found",
+            )
+        # Real, but is it this caller's? "*" on merchants covers only the
+        # token's resellers' merchants; "*" on resellers covers only the
+        # merchants the token names. Same 404, so a caller learns nothing
+        # about merchants outside its scope.
+        if not is_admin and not await _scope_covers_merchant(caller, merchant_id):
+            _log_refusal(merchant_id, "out_of_scope")
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail="Integration not found",

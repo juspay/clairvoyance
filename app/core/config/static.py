@@ -70,9 +70,10 @@ TTS_PREVIEW_PUBLIC_BASE_URL = os.environ.get("TTS_PREVIEW_PUBLIC_BASE_URL", "")
 # Inbound request archive (app/services/ingest_archive.py): the bucket for
 # POST /ingest/events and POST /leads while BB_INGEST_ARCHIVE_ENABLED (copy)
 # or BB_INGEST_DB_WRITES_DISABLED (park) is on. Objects hold the caller's
-# auth header, so only replay operators may read it. Authenticates with
-# GCS_CREDENTIALS_JSON above. Unset = nothing is archived and every request
-# runs as today.
+# auth header, its value encrypted with CREDENTIAL_ENCRYPTION_KEY (unset key
+# = nothing is archived); only replay operators may read the bucket.
+# Authenticates with GCS_CREDENTIALS_JSON above. Unset = nothing is archived
+# and every request runs as today.
 INGEST_ARCHIVE_GCS_BUCKET = os.environ.get("INGEST_ARCHIVE_GCS_BUCKET", "")
 
 ENABLE_AIC_FILTER = os.environ.get("ENABLE_AIC_FILTER", "false").lower() == "true"
@@ -1068,8 +1069,8 @@ CORS_ALLOWED_ORIGINS = [
 ]
 
 # Public MCP endpoint, POST /mcp/{platform}/{store} (app/api/routers/mcp.py).
-# Off by default: our own engine answers these URLs in process, and the route
-# has no caller auth yet. Turn it on only after auth is added to the route.
+# Off by default: our own engine answers these URLs in process. When on, the
+# route takes admin logins only (RBAC bearer token).
 MCP_PUBLIC_ENDPOINT_ENABLED = (
     os.environ.get("MCP_PUBLIC_ENDPOINT_ENABLED", "false").lower() == "true"
 )

@@ -92,10 +92,12 @@ class WidgetConfigCreate(BaseModel):
         description="Exact-match list of allowed Origin / Referer values. "
         "Empty list means deny all (widget cannot be used until populated).",
     )
-    max_sessions_per_ip_hour: int = Field(60, ge=0)
-    max_messages_per_ip_hour: int = Field(600, ge=0)
+    # The hourly limits go to check_rate_limit, where 0 means "limit off"
+    # (an ops switch). A widget's own limit can never be off, so 1 is the least.
+    max_sessions_per_ip_hour: int = Field(60, ge=1)
+    max_messages_per_ip_hour: int = Field(600, ge=1)
     max_concurrent_per_ip: int = Field(4, ge=0)
-    max_voice_sessions_per_ip_hour: int = Field(10, ge=0)
+    max_voice_sessions_per_ip_hour: int = Field(10, ge=1)
     active: bool = Field(True, description="Inactive rows behave like 404.")
     appearance: Optional[WidgetAppearance] = Field(
         None, description="Display-only widget appearance; omitted = defaults."
@@ -111,10 +113,11 @@ class WidgetConfigUpdate(BaseModel):
 
     template_id: Optional[str] = None
     allowed_origins: Optional[List[str]] = None
-    max_sessions_per_ip_hour: Optional[int] = Field(None, ge=0)
-    max_messages_per_ip_hour: Optional[int] = Field(None, ge=0)
+    # At least 1, as in WidgetConfigCreate: 0 would switch the limit off.
+    max_sessions_per_ip_hour: Optional[int] = Field(None, ge=1)
+    max_messages_per_ip_hour: Optional[int] = Field(None, ge=1)
     max_concurrent_per_ip: Optional[int] = Field(None, ge=0)
-    max_voice_sessions_per_ip_hour: Optional[int] = Field(None, ge=0)
+    max_voice_sessions_per_ip_hour: Optional[int] = Field(None, ge=1)
     active: Optional[bool] = None
     appearance: Optional[WidgetAppearance] = Field(
         None,

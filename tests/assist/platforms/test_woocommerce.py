@@ -42,7 +42,9 @@ from app.ai.voice.agents.breeze_buddy.template.types import (
     McpServerConfig,
 )
 from app.api.routers import mcp as mcp_route
+from app.api.security.breeze_buddy.rbac_token import get_current_user_with_rbac
 from app.core.security import ssrf
+from app.schemas import UserInfo, UserRole
 
 HOST = "www.shopyvision.com"
 STORE_API = f"https://{HOST}/wp-json/wc/store/v1"
@@ -869,6 +871,7 @@ def test_the_public_route_is_off_by_default():
 # --- the public route, when enabled (app/api/routers/mcp.py) ---
 
 ROUTE = f"/mcp/woocommerce/{HOST}"
+_MCP_ADMIN = UserInfo(id="admin-1", username="admin", role=UserRole.ADMIN)
 _RPC = {
     "jsonrpc": "2.0",
     "id": "1",
@@ -882,7 +885,8 @@ def route(monkeypatch, store):
     """The route mounted on its own app; ``route.full`` fills the store's cap."""
     app = FastAPI()
     app.include_router(mcp_route.router)
-    state = SimpleNamespace(full=False, store=store)
+    state = SimpleNamespace(full=False, store=store, user=_MCP_ADMIN)
+    app.dependency_overrides[get_current_user_with_rbac] = lambda: state.user
 
     async def rate_limit(**kwargs):
         assert kwargs["identifier"] == HOST
@@ -898,6 +902,37 @@ def route(monkeypatch, store):
 async def _post(route, path: str = ROUTE, **kwargs: Any) -> httpx.Response:
     async with route.client() as client:
         return await client.post(path, **kwargs)
+
+
+async def test_the_route_refuses_a_caller_who_is_not_an_admin(route):
+    # ``store`` is any host name: the route makes this service call a store
+    # the caller picks, so a merchant-level login is not enough.
+    route.user = UserInfo(
+        id="m-1",
+        username="shop",
+        role=UserRole.MERCHANT,
+        reseller_ids=["R1"],
+        merchant_ids=[HOST],
+    )
+    resp = await _post(route, json=_RPC)
+
+    assert resp.status_code == 403 and route.store == []
+
+
+async def test_the_route_refuses_a_caller_with_no_login(store):
+    # The real dependency, no override: no bearer token, no tool call.
+    app = FastAPI()
+    app.include_router(mcp_route.router)
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        missing = await client.post(ROUTE, json=_RPC)
+        bad = await client.post(
+            ROUTE, json=_RPC, headers={"Authorization": "Bearer not-a-token"}
+        )
+
+    assert missing.status_code in (401, 403) and bad.status_code == 401
+    assert store == []
 
 
 async def test_the_route_answers_any_store_host(route):

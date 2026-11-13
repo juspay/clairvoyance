@@ -1,8 +1,9 @@
 """``POST /mcp/{platform}/{store}``: the public route to our MCP tools.
 
 Mounted only when ``MCP_PUBLIC_ENDPOINT_ENABLED`` is on (``app/main.py``). Our
-engine never uses it; it answers the same URL in process. There is no caller
-check yet, so keep it off until auth is added here. Calls are capped per
+engine never uses it; it answers the same URL in process. The caller must be
+a logged-in admin (RBAC bearer token): ``store`` is any host name, so the
+route makes this service call a store the caller picks. Calls are capped per
 store host.
 """
 
@@ -11,11 +12,14 @@ from __future__ import annotations
 import json
 from typing import Any, Dict
 
-from fastapi import APIRouter, HTTPException, Request, status
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 from fastapi.responses import JSONResponse
 
 from app.ai.voice.agents.breeze_buddy.mcp import in_process, server
+from app.api.security.breeze_buddy.rbac_token import get_current_user_with_rbac
 from app.core.logger.context import set_log_context
+from app.core.security.authorization import require_admin
+from app.schemas import UserInfo
 from app.services.redis.rate_limit import check_rate_limit
 
 router = APIRouter()
@@ -27,13 +31,20 @@ _CALLS_PER_STORE_MINUTE = 600
 
 
 @router.post("/mcp/{platform}/{store}")
-async def mcp_tools_call(platform: str, store: str, request: Request) -> JSONResponse:
+async def mcp_tools_call(
+    platform: str,
+    store: str,
+    request: Request,
+    current_user: UserInfo = Depends(get_current_user_with_rbac),
+) -> JSONResponse:
     """Answer one JSON-RPC ``tools/call`` for ``store``.
 
+    401 without a login and 403 for a non-admin, before anything else;
     404 for a platform we do not host or a store that is not a host name;
     429 over the per-store cap. A tool failure is a JSON-RPC ``error`` with
     HTTP 200.
     """
+    require_admin(current_user)
     store = store.lower()
     call = in_process.tool_call(platform, store)
     if call is None:

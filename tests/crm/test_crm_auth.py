@@ -81,12 +81,17 @@ def _caller(
     merchant_ids: List[str] | None = None,
     reseller_ids: List[str] | None = None,
     role: UserRole = UserRole.MERCHANT,
+    merchant_reseller: str | None = "R1",
 ) -> None:
-    """Merchant has `stored` provisioned (or not); any presented token
-    decodes to a caller carrying the given scopes."""
+    """Merchant has `stored` provisioned (or not) and belongs to
+    `merchant_reseller`; any presented token decodes to a caller carrying
+    the given scopes."""
 
     async def fake_get(merchant_id: str) -> str | None:
         return stored
+
+    async def fake_merchant(merchant_id: str) -> object:
+        return SimpleNamespace(reseller_id=merchant_reseller)
 
     def fake_verify(token: str) -> UserInfo:
         return UserInfo(
@@ -102,14 +107,16 @@ def _caller(
 
     monkeypatch.setattr(crm_auth, "get_merchant_s2s_token", fake_get)
     monkeypatch.setattr(crm_auth, "check_merchant_identifier_exists", exists)
+    monkeypatch.setattr(crm_auth, "get_merchant_by_merchant_identifier", fake_merchant)
     monkeypatch.setattr(crm_auth.rbac_token_manager, "verify_rbac_token", fake_verify)
 
 
 @pytest.mark.parametrize(
     "merchant_ids,reseller_ids,role",
     [
-        (["*"], [], UserRole.RESELLER),  # wildcard on merchants — the relay
-        ([], ["*"], UserRole.RESELLER),  # wildcard on resellers
+        (["*"], ["*"], UserRole.RESELLER),  # wildcard on both — the relay
+        (["*"], ["R1"], UserRole.RESELLER),  # every merchant of R1; m1 is R1's
+        (["m1"], ["*"], UserRole.RESELLER),  # m1 named outright
         ([], [], UserRole.ADMIN),  # platform admin
     ],
 )
@@ -150,7 +157,7 @@ def test_caller_wildcard_token_rejects_a_merchant_that_does_not_exist(
     # read the envelope's merchant_id is taken on the caller's word, and a
     # typo'd shop domain quietly founds a tenant the belt then resolves
     # customers under. Same 404 the narrow path gives.
-    _caller(monkeypatch, stored=None, merchant_ids=["*"])
+    _caller(monkeypatch, stored=None, merchant_ids=["*"], reseller_ids=["*"])
 
     async def absent(merchant_id: str) -> bool:
         return False
@@ -159,6 +166,38 @@ def test_caller_wildcard_token_rejects_a_merchant_that_does_not_exist(
 
     with pytest.raises(HTTPException) as e:
         asyncio.run(verify_s2s_caller("ghost-shop", _request({"x-s2s-token": "relay"})))
+    assert e.value.status_code == 404
+
+
+@pytest.mark.parametrize(
+    "merchant_ids,reseller_ids,merchant_reseller",
+    [
+        (["*"], ["R1"], "R2"),  # token for reseller R1, merchant is R2's
+        (["*"], ["R1"], None),  # token for reseller R1, merchant has no reseller
+        (["m1"], ["*"], "R1"),  # token for merchant m1, pushed for another
+        ([], ["*"], "R1"),  # "*" on resellers names no merchant
+    ],
+)
+def test_caller_wildcard_token_cannot_push_outside_its_scope(
+    monkeypatch: pytest.MonkeyPatch,
+    merchant_ids: List[str],
+    reseller_ids: List[str],
+    merchant_reseller: str | None,
+) -> None:
+    # A "*" on one list is not "any merchant". merchant_ids=["*"] is every
+    # merchant of the token's resellers; reseller_ids=["*"] covers only the
+    # merchants the token names. Refused with the unknown-merchant 404, so
+    # the caller cannot probe what lies outside its scope.
+    _caller(
+        monkeypatch,
+        stored=None,
+        merchant_ids=merchant_ids,
+        reseller_ids=reseller_ids,
+        role=UserRole.RESELLER,
+        merchant_reseller=merchant_reseller,
+    )
+    with pytest.raises(HTTPException) as e:
+        asyncio.run(verify_s2s_caller("beta-bags", _request({"x-s2s-token": "t"})))
     assert e.value.status_code == 404
 
 
@@ -242,12 +281,19 @@ def _refusals(monkeypatch: pytest.MonkeyPatch) -> List[Dict[str, Any]]:
 
 
 @pytest.mark.parametrize(
-    "reason,stored,scopes,headers",
+    "reason,stored,scopes,reseller_scopes,headers",
     [
-        ("missing_token", None, ["*"], {}),
-        ("unknown_merchant", None, ["*"], {"x-s2s-token": "relay"}),
-        ("not_provisioned", None, ["m1"], {"x-s2s-token": "t"}),
-        ("token_mismatch", "rotated-in", ["m1"], {"x-s2s-token": "rotated-out"}),
+        ("missing_token", None, ["*"], ["*"], {}),
+        ("unknown_merchant", None, ["*"], ["*"], {"x-s2s-token": "relay"}),
+        ("out_of_scope", None, ["*"], ["R2"], {"x-s2s-token": "relay"}),
+        ("not_provisioned", None, ["m1"], [], {"x-s2s-token": "t"}),
+        (
+            "token_mismatch",
+            "rotated-in",
+            ["m1"],
+            [],
+            {"x-s2s-token": "rotated-out"},
+        ),
     ],
 )
 def test_each_refusal_names_its_reason_and_merchant(
@@ -255,12 +301,15 @@ def test_each_refusal_names_its_reason_and_merchant(
     reason: str,
     stored: str | None,
     scopes: List[str],
+    reseller_scopes: List[str],
     headers: Dict[str, str],
 ) -> None:
     """A merchant whose token breaks gets no error anyone sees — their
     events just stop arriving. One WARNING per refusal, reason as a
     field so a rule can count them per merchant."""
-    _caller(monkeypatch, stored=stored, merchant_ids=scopes)
+    _caller(
+        monkeypatch, stored=stored, merchant_ids=scopes, reseller_ids=reseller_scopes
+    )
     if reason == "unknown_merchant":
 
         async def absent(merchant_id: str) -> bool:
@@ -329,15 +378,24 @@ def test_caller_fails_closed_when_token_lookup_raises(
 # --- the tenancy check merchant-facing CRM routes share ---------------------
 
 
-def _user(role: str = "user", merchant_ids=("shop",)) -> object:
-    """A UserInfo-shaped stand-in; only three fields are read."""
+def _user(role: str = "user", merchant_ids=("shop",), reseller_ids=()) -> object:
+    """A UserInfo-shaped stand-in; only four fields are read."""
     return SimpleNamespace(
-        role=role, merchant_ids=list(merchant_ids), username="someone"
+        role=role,
+        merchant_ids=list(merchant_ids),
+        reseller_ids=list(reseller_ids),
+        username="someone",
+    )
+
+
+def _access(user: object, merchant_id: str) -> None:
+    asyncio.run(
+        crm_auth.assert_merchant_access(cast(Any, user), merchant_id, "onboard")
     )
 
 
 def test_a_caller_may_touch_their_own_merchant() -> None:
-    crm_auth.assert_merchant_access(cast(Any, _user()), "shop", "onboard")
+    _access(_user(), "shop")
 
 
 def test_a_caller_may_not_touch_another_merchant() -> None:
@@ -345,16 +403,35 @@ def test_a_caller_may_not_touch_another_merchant() -> None:
     writes, because merchant_id arrives in the REQUEST and a caller may hold
     several — there is no single 'current' one to infer from the token."""
     with pytest.raises(HTTPException) as caught:
-        crm_auth.assert_merchant_access(cast(Any, _user()), "rival", "onboard")
+        _access(_user(), "rival")
     assert caught.value.status_code == 403
 
 
 def test_the_wildcard_and_admins_pass() -> None:
     """Our team still drives the pilot: admins pass, so making these routes
     merchant-facing does not take the surface away from ops."""
-    crm_auth.assert_merchant_access(
-        cast(Any, _user(merchant_ids=("*",))), "anything", "onboard"
-    )
-    crm_auth.assert_merchant_access(
-        cast(Any, _user(role="admin", merchant_ids=())), "anything", "onboard"
-    )
+    _access(_user(merchant_ids=("*",), reseller_ids=("*",)), "anything")
+    _access(_user(role="admin", merchant_ids=()), "anything")
+
+
+def test_a_wildcard_on_merchants_covers_only_the_tokens_resellers(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """merchant_ids=["*"] with reseller_ids=["R1"] is every merchant of R1.
+    Read as "any merchant", it opened every merchant_scope route to that
+    token for every other reseller's merchants."""
+    resellers = {"r1-shop": "R1", "r2-shop": "R2"}
+
+    async def fake_merchant(merchant_id: str) -> object:
+        if merchant_id not in resellers:
+            return None
+        return SimpleNamespace(reseller_id=resellers[merchant_id])
+
+    monkeypatch.setattr(crm_auth, "get_merchant_by_merchant_identifier", fake_merchant)
+    r1_wide = _user(role="reseller", merchant_ids=("*",), reseller_ids=("R1",))
+
+    _access(r1_wide, "r1-shop")
+    for outside in ("r2-shop", "unknown-shop"):
+        with pytest.raises(HTTPException) as caught:
+            _access(r1_wide, outside)
+        assert caught.value.status_code == 403

@@ -11,6 +11,8 @@ The automatic monitor runs independently and only ever marks the flag
 unhealthy (1->0); the manage endpoint is the only way to restore it.
 """
 
+import re
+
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 
@@ -65,6 +67,20 @@ async def get_dragon_tts_status(
 # routes above: get_current_user_with_rbac (Depends) + in-body require_admin.
 
 _PROXY_TIMEOUT = 30.0
+
+# A DragonTTS cache key is a sha256 hex digest (dragontts/app/cache/key.py).
+_CACHE_KEY = re.compile(r"[0-9a-f]{64}")
+
+
+def _cache_path(key: str, suffix: str = "") -> str:
+    """The DragonTTS path for one cache entry. ``key`` goes into the upstream
+    URL, so it must BE a cache key: a ``?`` or ``#`` in it cut off ``suffix``
+    and reached DragonTTS endpoints this proxy does not expose (``/cache/clear``,
+    ``/cache/delete-by-text``). Anything else is the 404 DragonTTS gives an
+    unknown key, and nothing is sent."""
+    if not _CACHE_KEY.fullmatch(key):
+        raise HTTPException(status_code=404, detail="cache key not found")
+    return f"/cache/{key}{suffix}"
 
 
 async def _forward(method: str, path: str, **kwargs) -> Response:
@@ -123,7 +139,7 @@ async def proxy_cache_get(
 ):
     """Download a cached entry's audio by hash. Proxied to DragonTTS GET /cache/{key}."""
     require_admin(current_user)
-    return await _forward("GET", f"/cache/{key}")
+    return await _forward("GET", _cache_path(key))
 
 
 @router.delete("/admin/dragontts/cache/{key}")
@@ -132,7 +148,7 @@ async def proxy_cache_delete(
 ):
     """Delete a cached entry by hash. Proxied to DragonTTS DELETE /cache/{key}."""
     require_admin(current_user)
-    return await _forward("DELETE", f"/cache/{key}")
+    return await _forward("DELETE", _cache_path(key))
 
 
 @router.post("/admin/dragontts/cache/{key}/resynth")
@@ -142,7 +158,7 @@ async def proxy_cache_resynth(
     """Re-synthesize an entry from its stored metadata. Proxied to DragonTTS
     POST /cache/{key}/resynth."""
     require_admin(current_user)
-    return await _forward("POST", f"/cache/{key}/resynth")
+    return await _forward("POST", _cache_path(key, "/resynth"))
 
 
 @router.post("/admin/dragontts/cache/{key}/audio")
@@ -154,10 +170,11 @@ async def proxy_cache_replace_audio(
     """Replace an entry's audio with a user-supplied WAV (base64 JSON body).
     Proxied verbatim to DragonTTS POST /cache/{key}/audio."""
     require_admin(current_user)
+    path = _cache_path(key, "/audio")
     raw = await request.body()
     return await _forward(
         "POST",
-        f"/cache/{key}/audio",
+        path,
         content=raw,
         headers={"content-type": "application/json"},
     )

@@ -464,7 +464,7 @@ app.include_router(crm_api.router, prefix="")
 app.include_router(systems.router, prefix="", tags=["Systems"])
 
 # Public MCP route (routers/mcp.py). Off by default: our engine answers these
-# URLs in process, and the route has no caller auth yet.
+# URLs in process. Admin logins only.
 if MCP_PUBLIC_ENDPOINT_ENABLED:
     app.include_router(mcp.router, prefix="", tags=["MCP"])
 

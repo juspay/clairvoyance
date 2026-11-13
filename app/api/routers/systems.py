@@ -2,7 +2,8 @@
 System Health Check Router
 
 Endpoints for monitoring system health including Redis connectivity.
-Responses carry the error type only; the error text goes to the logs.
+Responses carry at most the error type; the error text goes to the logs.
+/health/database is public and carries neither.
 """
 
 import time
@@ -202,14 +203,16 @@ async def database_health_check():
                     },
                 )
     except Exception as e:
-        logger.error(f"Database health check failed: {e}")
+        # Public route: it answers healthy or not. The error type tells an
+        # anonymous caller WHAT is failing (auth, DNS, pool), so it is logged,
+        # not returned.
+        logger.error(f"Database health check failed: {type(e).__name__}: {e}")
         return JSONResponse(
             status_code=400,
             content={
                 "status": "unhealthy",
                 "database": "disconnected",
                 "message": "Database connection failed",
-                "error_type": type(e).__name__,
             },
         )
 

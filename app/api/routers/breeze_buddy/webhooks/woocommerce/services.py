@@ -17,6 +17,7 @@ signs each delivery with (X-WC-Webhook-Signature).
 
 import hmac
 import json
+import re
 from typing import Any, Dict
 
 from fastapi import HTTPException, Request, status
@@ -32,6 +33,10 @@ from app.database.accessor.breeze_buddy.merchants import (
 from .abandonment import process_abandoned_checkout
 from .order import process_order_confirmation
 from .utils import TOPIC_ABANDONED_CHECKOUT, TOPIC_ORDER_CONFIRMATION
+
+# The whole body of WooCommerce's activation ping (WC_Webhook::deliver_ping):
+# `webhook_id=<the webhook's numeric id>` and nothing else.
+_PING_BODY = re.compile(rb"webhook_id=\d+")
 
 
 async def handle_woocommerce(
@@ -67,8 +72,10 @@ async def handle_woocommerce(
     # signature header. It carries no order data — ack it 200 so WooCommerce
     # activates the endpoint. (A failing ping gets the webhook auto-disabled
     # after a few retries.) Real deliveries are JSON and carry a signature.
+    # The body must BE the ping, not merely contain `webhook_id`: an unsigned
+    # body that can carry anything else is an unsigned delivery.
     if not signature:
-        if b"webhook_id" in raw_body:
+        if _PING_BODY.fullmatch(raw_body):
             logger.info(f"woocommerce ping for merchant {merchant_id}")
             return {"status": "ok", "ping": True}
         raise HTTPException(

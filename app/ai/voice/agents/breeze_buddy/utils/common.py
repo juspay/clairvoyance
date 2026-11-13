@@ -154,13 +154,25 @@ async def send_webhook_with_retry(
         max_retries: maximum number of attempts (default 3)
 
     Returns:
-        bool: True if successful, False if all attempts failed
+        bool: True if successful, False if all attempts failed, or if the
+        signing key is unset (nothing is sent)
     """
+    if not ORDER_CONFIRMATION_WEBHOOK_SECRET_KEY:
+        # Fail closed: the payload carries the lead's name, phone and order,
+        # and a receiver cannot tell an unsigned webhook from a forged one.
+        logger.error(
+            "Webhook not sent: ORDER_CONFIRMATION_WEBHOOK_SECRET_KEY is unset, "
+            "so the payload cannot be signed"
+        )
+        return False
+
     payload = json.dumps(data, separators=(",", ":"), ensure_ascii=False)
-    signature = calculate_hmac_sha256(payload, ORDER_CONFIRMATION_WEBHOOK_SECRET_KEY)
-    headers = {"Content-Type": "application/json"}
-    if signature:
-        headers["checksum"] = signature
+    headers = {
+        "Content-Type": "application/json",
+        "checksum": calculate_hmac_sha256(
+            payload, ORDER_CONFIRMATION_WEBHOOK_SECRET_KEY
+        ),
+    }
 
     for attempt in range(1, max_retries + 1):
         try:
