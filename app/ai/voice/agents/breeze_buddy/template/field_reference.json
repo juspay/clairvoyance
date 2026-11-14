@@ -446,6 +446,19 @@
       "description": "How the widget reveals assistant prose. 'stream' (default) = paced typewriter as tokens arrive. 'complete' = a typing indicator while the reply is in flight, then the full message at once (Messenger style). Presentation-only: the SSE transport streams either way.",
       "example": "complete"
     },
+    "feedback": {
+      "description": "Customer feedback in the widget: 👍/👎 under each bot reply (rate_replies) and an end card asked once per chat when it is over (rate_chat). Unset = both off. Fields documented under FeedbackConfig.",
+      "example": {
+        "rate_replies": true,
+        "rate_chat": true,
+        "events": [
+          {
+            "field": "paymentStatusResponse.orderStatus",
+            "values": ["CHARGED", "SUCCESS"]
+          }
+        ]
+      }
+    },
     "wake_phrase": {
       "description": "Require the user to say a trigger phrase before the bot responds. Useful for IVR-style consent flows. phrases: list of accepted trigger words. single_activation: if true, phrase required only once per session.",
       "example": {
@@ -1249,6 +1262,62 @@
       "example": {
         "woocommerce": "3f2a9c1e-7b4d-4e8a-9f0c-1d2e3f4a5b6c"
       }
+    }
+  },
+  "FeedbackConfig": {
+    "rate_replies": {
+      "description": "Show 👍/👎 under each finished bot reply. Default false.",
+      "example": true
+    },
+    "rate_chat": {
+      "description": "Ask how the chat went, once per chat, when it is over: a page event in events matches (right away), the customer taps New chat, or the server ends the chat for inactivity (on the customer's next open, within 24 h). Default false.",
+      "example": true
+    },
+    "pills": {
+      "description": "2–6 multi-select choices on the end card; each has a stable id (counted in analytics) and a label. Ids must be unique. Default: helped, not_answered, wrong_info.",
+      "example": [
+        {
+          "id": "helped",
+          "label": "Yes, it helped"
+        },
+        {
+          "id": "helped_pay",
+          "label": "Helped me pay"
+        }
+      ]
+    },
+    "events": {
+      "description": "Up to 5 page events that mean the task is done, so the end card shows right away. The host page pushes them with POST /widget/session/{id}/context and the server checks them; any one matches. Fields under FeedbackEvent. Empty = none.",
+      "example": [
+        {
+          "field": "paymentStatusResponse.orderStatus",
+          "values": ["CHARGED", "SUCCESS"]
+        },
+        {
+          "field": "booking.status",
+          "values": ["confirmed"]
+        }
+      ]
+    }
+  },
+  "FeedbackEvent": {
+    "field": {
+      "description": "Dot path into the pushed event data: keys joined by single dots, no spaces (up to 200 chars).",
+      "example": "paymentStatusResponse.orderStatus"
+    },
+    "values": {
+      "description": "1–10 values at field that mean the task is done; any one matches. Strings, numbers or booleans. Text matches ignoring case (\"charged\" = \"CHARGED\"); numbers and booleans match exactly.",
+      "example": ["CHARGED", "SUCCESS"]
+    }
+  },
+  "FeedbackPill": {
+    "id": {
+      "description": "Stable key ([a-z0-9_], up to 40 chars) stored with the feedback; keep it when the label changes.",
+      "example": "helped"
+    },
+    "label": {
+      "description": "Text shown on the pill (up to 60 chars).",
+      "example": "Yes, it helped"
     }
   }
 }

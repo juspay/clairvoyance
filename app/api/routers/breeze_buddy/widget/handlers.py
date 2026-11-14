@@ -120,9 +120,12 @@ from app.schemas.breeze_buddy.chat import (
     CreateWidgetSessionRequest,
     CreateWidgetSessionResponse,
     CustomComponentWire,
+    FeedbackPillWire,
+    FeedbackWire,
     FlavorWire,
     GreetingTileWire,
     QuickReplyWire,
+    RateChatWire,
     SendChatMessageRequest,
     UpdateWidgetContextRequest,
     UpdateWidgetContextResponse,
@@ -219,6 +222,26 @@ class _WidgetSurface:
     enable_text_input: bool = True
     greeting_tiles: List[GreetingTileWire] = field(default_factory=list)
     response_reveal: Literal["stream", "complete"] = "stream"
+    feedback: FeedbackWire = field(default_factory=FeedbackWire)
+
+
+def _feedback_wire(configurations: object) -> FeedbackWire:
+    """``configurations.feedback`` as the widget sees it. Unset = both off;
+    the end card ships only when enabled, so a disabled card never reaches
+    the embed."""
+    cfg = getattr(configurations, "feedback", None)
+    if cfg is None:
+        return FeedbackWire()
+    return FeedbackWire(
+        rate_replies=cfg.rate_replies,
+        rate_chat=(
+            RateChatWire(
+                pills=[FeedbackPillWire(id=p.id, label=p.label) for p in cfg.pills]
+            )
+            if cfg.rate_chat
+            else None
+        ),
+    )
 
 
 def _extract_widget_config(template: object) -> _WidgetSurface:
@@ -254,6 +277,7 @@ def _extract_widget_config(template: object) -> _WidgetSurface:
             for t in (getattr(configurations, "greeting_tiles", None) or [])
         ],
         response_reveal=getattr(configurations, "response_reveal", "stream"),
+        feedback=_feedback_wire(configurations),
     )
 
 
@@ -283,6 +307,7 @@ async def _surface_wire(
         ui_flavors=ui_flavors,
         flavor=_template_flavor(template),
         custom_components=await _custom_components_wire(template, catalog_active),
+        feedback=surface.feedback,
     )
 
 
