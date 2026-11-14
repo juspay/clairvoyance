@@ -2567,6 +2567,95 @@ class AgentTransferConfig(BaseModel):
     )
 
 
+class FeedbackPill(BaseModel):
+    """One choice on the end-of-chat feedback card."""
+
+    id: str = Field(
+        ...,
+        pattern=r"^[a-z0-9_]{1,40}$",
+        description="Stable key stored with the feedback and counted in "
+        "analytics. Keep it fixed when the label changes.",
+    )
+    label: str = Field(
+        ..., min_length=1, max_length=60, description="Text shown on the pill."
+    )
+
+
+class FeedbackEvent(BaseModel):
+    """A page event that means the customer's task is done, so the end card
+    shows now: the value at ``field`` equals one of ``values``.
+
+    The host pushes events with ``POST /widget/session/{id}/context`` and the
+    server checks them; any merchant can watch any field. IndiGo, for
+    example, asks when ``paymentStatusResponse.orderStatus`` becomes
+    ``CHARGED``. Text values match ignoring case; numbers and booleans match
+    exactly.
+    """
+
+    field: str = Field(
+        ...,
+        max_length=200,
+        # Keys joined by single dots, no spaces: a typo such as a trailing
+        # space or "a..b" could never match a push, so it is refused here.
+        pattern=r"^[^.\s]+(\.[^.\s]+)*$",
+        description="Dot path into the pushed event data, e.g. "
+        "'paymentStatusResponse.orderStatus'.",
+    )
+    values: List[Union[bool, int, float, str]] = Field(
+        ...,
+        min_length=1,
+        max_length=10,
+        description="Values at `field` that mean the chat is over; any one "
+        "matches. Text ignores case.",
+    )
+
+    @field_validator("values")
+    @classmethod
+    def _no_blank_text(cls, values: List[Any]) -> List[Any]:
+        if any(isinstance(v, str) and not v.strip() for v in values):
+            raise ValueError("event values cannot be blank text")
+        return values
+
+
+def _default_feedback_pills() -> List[FeedbackPill]:
+    return [
+        FeedbackPill(id="helped", label="Yes, it helped"),
+        FeedbackPill(id="not_answered", label="Didn't answer my question"),
+        FeedbackPill(id="wrong_info", label="Wrong information"),
+    ]
+
+
+class FeedbackConfig(BaseModel):
+    """Customer feedback in the widget: 👍/👎 per bot reply and an end card.
+
+    The end card is asked once per chat, when the chat is over: a page event
+    in ``events`` matches, the customer taps New chat, or the server ends the
+    chat for inactivity (then on the customer's next open).
+    """
+
+    rate_replies: bool = Field(False, description="Show 👍/👎 under bot replies.")
+    rate_chat: bool = Field(False, description="Ask how the chat went once it is over.")
+    pills: List[FeedbackPill] = Field(
+        default_factory=_default_feedback_pills,
+        min_length=2,
+        max_length=6,
+        description="Choices on the end card (multi-select).",
+    )
+    events: List[FeedbackEvent] = Field(
+        default_factory=list,
+        max_length=5,
+        description="Page events that mean the task is done, so the card "
+        "shows right away; any one matches. Empty = none.",
+    )
+
+    @model_validator(mode="after")
+    def _unique_pill_ids(self):
+        ids = [p.id for p in self.pills]
+        if len(ids) != len(set(ids)):
+            raise ValueError("feedback.pills ids must be unique")
+        return self
+
+
 class ConfigurationModel(BaseModel):
     # --- Agent session state (generic) ---
     state_reducers: List[StateReducer] = Field(
@@ -2774,6 +2863,13 @@ class ConfigurationModel(BaseModel):
             "indicator while the reply is in flight, then the full message "
             "at once (Messenger style). Presentation-only: the SSE "
             "transport streams either way."
+        ),
+    )
+    feedback: Optional[FeedbackConfig] = Field(
+        None,
+        description=(
+            "Customer feedback in the widget: 👍/👎 per bot reply and an "
+            "end-of-chat card with pills. Unset = both off."
         ),
     )
     ivr_configuration: Optional[IvrConfig] = None  # IVR-specific configuration
